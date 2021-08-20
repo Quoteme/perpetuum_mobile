@@ -1,0 +1,6 @@
+[submodule "src/voxel-mesh"]
+	path = src/voxel-mesh
+	url = https://github.com/quoteme/voxel-mesh/
+[submodule "src/cutimg"]
+	path = src/cutimg
+	url = https://github.com/quoteme/cutimg.git
