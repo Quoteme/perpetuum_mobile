@@ -4,8 +4,7 @@
  */
 
 import * as THREE from './three.module.js';
-import * as MESHER from 'lib/voxel-mesh/voxelMesh.mjs';
-import * as CUTIMG from 'lib/cutImg/cutImg.mjs';
+import * as MESHER from './voxel-mesh/voxelMesh.mjs';
 
 /**
  * A level which consists of a map, objects in it and functions
@@ -16,17 +15,22 @@ export class Level {
 	 * Construct a level from JSON data (provided by the tiled editor)
 	 * @param {Object} json
 	 */
-	constructor(json) {
-		this.map;
-		this.entities;
-		this.updates;
+	constructor(map, entities, updates) {
+		this.map = map;
+		this.entities = entities;
+		this.updates = updates;
 	}
 	/**
 	 * Load a level from a url
 	 * @param {String} url
 	 */
-	async load(url){
-		return Level(await fetch(url).json())
+	static async load(url){
+		let json = await fetch(url).then(r => r.json())
+		let materials = await Promise.all(json.materials.map(Material.load))
+		let map = Map.fromVox(json.voxels, materials);
+		let entities = [];
+		let updates = [];
+		return new Level(map, entities, updates);
 	}
 }
 
@@ -36,60 +40,134 @@ export class Level {
 class Map {
 	/**
 	 * Create a Map
+	 * @param {Number[][][]} vox - A array of voxel-ids
+	 * @param materials - An array for each different voxel-id
 	 * @param obj - a three.js object
 	 */
-	constructor(obj){
-		this = obj;
+	constructor(vox, materials, obj){
+		this.vox = vox;
+		this.materials = materials;
+		this.obj = obj;
 	}
 	/**
+	 * Returns the map as a threejs object
+	 */
+	threejs(){
+		return this.obj;
+	}
+	/**
+	 * Create a new map from given voxel-data and corresponding
+	 * materials
 	 * @param {Number[][][]} vox - A array of voxel-ids
 	 * @param materials - An array for each different voxel-id
 	 */
-	fromVox(vox, materials){
-		let group = new THREE.Group();
-		for(let i=0; i<=materials.length; i++){
+	static fromVox(vox, materials){
+		let obj = new THREE.Group();
+		// create a mesh from all the voxels of number i in the
+		// "vox"-array and bind the "material[i]" to it.
+		// (skip voxels whose corresponding material is of type "Empty")
+		// then add all these meshes to one main mesh "obj"
+		for(let i=0; i<materials.length; i++){
+			if (materials[i].type == "Empty") continue;
 			let geometry = MESHER.multiMaterial(MESHER.voxToGeometry(
 				vox.map(x => x.map(y => y.map(z => z==i+1)))
 			))
-			group.push( new THREE.Mesh(geometry, materials[i]) )
+			console.log(geometry)
+			let mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0xffffff}))
+			console.log(mesh);
+			// obj.add()
 		}
-		return group;
+		return new Map(vox, materials, obj);
 	}
 }
 
 /**
- * A set of tiles used to build a map from voxels
+ * A material for a voxel
  */
-class Tileset {
+class Material {
 	/**
-	 * Create a new tileset
-	 * @param {Image} img - tileset
-	 * @param {Number} dx - spacing between tiles horizontally
-	 * @param {Number} dy - spacing between tiles vertically
+	 * Create a new material
+	 * @param {String} name
+	 * @param {String} type
+	 * @param {Texture} Texture
 	 */
-	constructor(img, dx, dy){
-		this.tileset = img;
-		this.dx = dx;
-		this.dy = dy;
+	constructor(name, type, texture){
+		this.name = name;
+		this.type = type;
+		this.texture = texture;
 	}
 	/**
-	 * Load a tileset from a url
+	 * Load a material from json data found in a level file
 	 */
-	async load(url, dx, dy){
-		let img = new Image();
-		img.src = url;
-		await img.decode();
-		return new Tileset(img, dx, dy);
+	static async load(material){
+		let name = material.name;
+		let type = material.type;
+		if(type=="Empty") return new Material(name, type, undefined);
+		let texture = await Texture.load(material.texture);
+		return new Material(name, type, texture);
+	}
+}
+
+/**
+ * A texture which a material might be based on
+ */
+class Texture {
+	/**
+	 * Construct a new texture for voxels
+	 * @param {Image} left
+	 * @param {Image} right
+	 * @param {Image} front
+	 * @param {Image} back
+	 * @param {Image} top
+	 * @param {Image} bottom
+	 */
+	constructor(left, right, front, back, top, bottom){
+		this.left = left;
+		this.right = right;
+		this.front = front
+		this.back = back
+		this.top = top
+		this.bottom = bottom
 	}
 	/**
-	 * Get the tile corresponding to a specific id
-	 * 0 | 1 | 2
-	 * 3 | 4 | 5
-	 * 6 | 7 | 8
+	 * return this texture for usage in three.js
+	 * @returns {Object} - threejs compatible texture
 	 */
-	getTile(id){
-		let x = (id%(this.tileset.width/this.dx))*this.dx
-		let y = Math.floor(id/(this.tileset.width/this.dx))*this.dy
-		return CUTIMG.cut(this.tileset,x,y,this.dx,this.dy)
+	threejs(){
+		return new THREE.CubeTexture([this.left, this.right, this.front, this.back, this.top, this.bottom])
+	}
+	/**
+	 * Load a texture from a json object of the form:
+	 * @example
+	 * 	"texture": {
+	 * 		"left"   : "./grass_side.png",
+	 * 		"right"  : "./grass_side.png",
+	 * 		"front"  : "./grass_side.png",
+	 * 		"back"   : "./grass_side.png",
+	 * 		"top"    : "./grass_top.png",
+	 * 		"bottom" : "./dirt.png"
+	 * }
+	 * @param {Object} texture
+	 */
+	static async load(texture){
+		let left = new Image();
+		left.src = texture.left;
+		let right = new Image();
+		right.src = texture.right;
+		let front = new Image();
+		front.src = texture.front;
+		let back = new Image();
+		back.src = texture.back;
+		let top = new Image();
+		top.src = texture.top;
+		let bottom = new Image();
+		bottom.src = texture.bottom;
+		await left.decode();
+		await right.decode();
+		await front.decode();
+		await back.decode();
+		await top.decode();
+		await bottom.decode();
+		return new Texture(left, right, front, back, top, bottom);
 	}
 }
